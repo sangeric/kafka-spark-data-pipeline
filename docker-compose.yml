@@ -1,3 +1,23 @@
+# ..\sql\venv\Scripts\activate.ps1
+# C:\Users\erics\OneDrive\Bureau\projet_traning\spark_kafka_airflow
+
+
+#docker exec -it spark-master /opt/spark/bin/spark-submit --master spark://spark-master:7077 /opt/spark/project/src/orchestrator.py batch
+#docker compose up airflow-init  -> initialiser airflow
+#docker compose up -d -> exécuter les containeur
+#docker logs airflow-apiserver -> voir les logs du containeur airflow-apiserver
+#admin : HR7qtVs9xE72vmFx
+#docker compose ps -> verifier les containeur actif 
+#docker compose logs -f airflow-dag-processor -> voir les logs d'airflow-dag-processor
+#docker exec -it airflow-scheduler airflow dags list -> voir ceux qui sont ouverts
+#docker exec -it airflow-scheduler airflow dags unpause hello_airflow -> unpause dag hello_airflow
+#docker exec -it airflow-scheduler airflow dags trigger hello_airflow -> activate the dags
+#docker exec -it airflow-scheduler airflow dags list-runs hello_airflow -> vérifier si ça s'est activé
+#docker exec -it airflow-scheduler airflow dags list-runs hello_airflow -> historique des dags si fail ou pas date etc
+#docker compose logs --tail=100 airflow-scheduler -> voir les 100 dernière ligne des logs d'airflow-scheduler
+#docker exec -it airflow-scheduler airflow dags unpause hello_airflow -> vérifier si mon dag est en pause et le dépauser
+
+
 services:
 
   spark-master:
@@ -10,7 +30,7 @@ services:
 
     environment:
       SPARK_NO_DAEMONIZE: "true"
-    
+
     ports:
       - "8081:8080"
       - "7077:7077"
@@ -65,3 +85,124 @@ services:
       - ./:/opt/spark/project
 
     working_dir: /opt/spark/project
+
+
+  postgres:
+    image: postgres:16
+    container_name: airflow-postgres
+
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+
+    volumes:
+      - postgres-airflow-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+
+  airflow-init:
+    image: apache/airflow:3.3.1
+    container_name: airflow-init
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+    command:
+      - bash
+      - -c
+      - |
+        airflow db migrate
+
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+
+
+  airflow-apiserver:
+    image: apache/airflow:3.3.1
+    container_name: airflow-apiserver
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
+
+    command: api-server
+
+    ports:
+      - "8082:8080"
+
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+
+
+  airflow-scheduler:
+    image: apache/airflow:3.3.1
+    container_name: airflow-scheduler
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_started
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+      AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
+    command: scheduler
+
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+
+
+  airflow-dag-processor:
+    image: apache/airflow:3.3.1
+    container_name: airflow-dag-processor
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
+
+    command: dag-processor
+
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+
+
+volumes:
+  postgres-airflow-data:
