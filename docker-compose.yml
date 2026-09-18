@@ -118,7 +118,7 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-
+      PYTHONPATH: /opt/airflow
     command:
       - bash
       - -c
@@ -128,6 +128,8 @@ services:
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
 
 
   airflow-apiserver:
@@ -145,6 +147,7 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
+      PYTHONPATH: /opt/airflow
 
     command: api-server
 
@@ -154,6 +157,8 @@ services:
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
 
 
   airflow-scheduler:
@@ -174,11 +179,15 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
       AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
+      PYTHONPATH: /opt/airflow
     command: scheduler
 
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - /var/run/docker.sock:/var/run/docker.sock
 
 
   airflow-dag-processor:
@@ -196,12 +205,15 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
+      PYTHONPATH: /opt/airflow #permis de débugger le problème d'import 
 
     command: dag-processor
 
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
 
 
 volumes:
