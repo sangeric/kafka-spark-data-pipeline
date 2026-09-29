@@ -2,8 +2,7 @@ from pathlib import Path
 import json
 import sys
 
-from src.download.download_binance import download_bronze, unzip
-from src.download.api_binance import get_binance_api
+
 
 
 BRONZE_DIR = Path("data/bronze")
@@ -11,6 +10,7 @@ GOLD_DIR = Path("data/gold")
 
 
 def download_batch():
+    from src.download.download_binance import download_bronze, unzip
     BRONZE_DIR.mkdir(parents=True, exist_ok=True)
 
     url = (
@@ -85,6 +85,7 @@ def transform_batch():
 
 
 def download_api():
+    from src.download.api_binance import get_binance_api
     BRONZE_DIR.mkdir(parents=True, exist_ok=True)
 
     json_binance = get_binance_api()

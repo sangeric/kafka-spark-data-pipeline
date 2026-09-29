@@ -1,3 +1,15 @@
+# Python
 __pycache__/
 *.py[cod]
+ 
+# Airflow
 logs/
+ 
+# restes sur machine
+.env
+secrets/*
+!secrets/*.example
+ 
+# Divers
+_to_delete/
+ 

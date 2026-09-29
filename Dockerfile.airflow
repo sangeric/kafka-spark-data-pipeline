@@ -1,0 +1,18 @@
+# OPTIONNEL - image Airflow capable de lancer Spark.
+# L'image officielle apache/airflow ne contient ni Java, ni PySpark, ni le client docker :
+#   - DAG binance_api   : a besoin de Java 17 + PySpark (le driver Spark tourne dans Airflow)
+#   - DAG binance_batch : a besoin du client docker (docker exec spark-master spark-submit)
+# À activer dans docker-compose.yml (bloc "build" en commentaire). À tester avant l'entretien.
+
+ARG AIRFLOW_VERSION=3.3.1
+FROM apache/airflow:${AIRFLOW_VERSION}
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-17-jre-headless docker.io \
+    && rm -rf /var/lib/apt/lists/*
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+USER airflow
+# Même version que le cluster Spark
+RUN pip install --no-cache-dir "pyspark==4.0.0" requests

@@ -1,170 +1,150 @@
-# ..\sql\venv\Scripts\activate.ps1
-# C:\Users\erics\OneDrive\Bureau\projet_traning\spark_kafka_airflow
+# Pipeline Binance : Spark 4 (1 master + 2 workers) + Airflow 3 + Postgres
+#
+# Aucune valeur sensible ici : tout vient du fichier .env (jamais commité).
+# Modèle à copier : .env.example
+#
+# Lancement :
+#   docker compose up airflow-init   # initialise la base Airflow (une seule fois)
+#   docker compose up -d             # démarre tout
+#
+# Ports publiés sur 127.0.0.1 uniquement : accessibles depuis ton PC,
+# pas depuis le reste du réseau (Wi-Fi, box...).
 
+# ---------------------------------------------------------------------------
+# Blocs communs (ancres YAML) : évitent de répéter la même config 4 fois
+# ---------------------------------------------------------------------------
 
-#docker exec -it spark-master /opt/spark/bin/spark-submit --master spark://spark-master:7077 /opt/spark/project/src/orchestrator.py batch
-#docker compose up airflow-init  -> initialiser airflow
-#docker compose up -d -> exécuter les containeur
-#docker logs airflow-apiserver -> voir les logs du containeur airflow-apiserver
-#admin : HR7qtVs9xE72vmFx
-#docker compose ps -> verifier les containeur actif 
-#docker compose logs -f airflow-dag-processor -> voir les logs d'airflow-dag-processor
-#docker exec -it airflow-scheduler airflow dags list -> voir ceux qui sont ouverts
-#docker exec -it airflow-scheduler airflow dags unpause hello_airflow -> unpause dag hello_airflow
-#docker exec -it airflow-scheduler airflow dags trigger hello_airflow -> activate the dags
-#docker exec -it airflow-scheduler airflow dags list-runs hello_airflow -> vérifier si ça s'est activé
-#docker exec -it airflow-scheduler airflow dags list-runs hello_airflow -> historique des dags si fail ou pas date etc
-#docker compose logs --tail=100 airflow-scheduler -> voir les 100 dernière ligne des logs d'airflow-scheduler
-#docker exec -it airflow-scheduler airflow dags unpause hello_airflow -> vérifier si mon dag est en pause et le dépauser
+#launch a spark job : docker exec -it spark-master /opt/spark/bin/spark-submit --master spark://spark-master:7077 /opt/spark/project/src/orchestrator.py batch
 
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+  # Utilisateur de l'UI : "nom:rôle". Le mot de passe est lu dans le fichier ci-dessous
+  AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${AIRFLOW_ADMIN_USER}:admin
+  AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/secrets/simple_auth_manager_passwords.json
+  PYTHONPATH: /opt/airflow
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:${AIRFLOW_VERSION}
+  # Pour que les DAGs binance puissent lancer Spark (PySpark + Java + CLI docker),
+  # remplacer la ligne "image" ci-dessus par :
+  # build:
+  #   context: .
+  #   dockerfile: Dockerfile.airflow
+  #   args:
+  #     AIRFLOW_VERSION: ${AIRFLOW_VERSION}
+  environment: *airflow-env
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./src:/opt/airflow/src
+    - ./data:/opt/airflow/data
+    - ./secrets:/opt/airflow/secrets
+
+x-spark-volumes: &spark-volumes
+  - ./:/opt/spark/project
+  # Même chemin que côté Airflow : quand le driver tourne dans Airflow (DAG API),
+  # les exécuteurs trouvent les fichiers au chemin /opt/airflow/data qu'il leur donne
+  - ./data:/opt/airflow/data
+
+x-spark-worker: &spark-worker
+  image: apache/spark:${SPARK_VERSION}
+  depends_on:
+    - spark-master
+  command:
+    - /opt/spark/sbin/start-worker.sh
+    - spark://spark-master:7077
+  environment:
+    SPARK_WORKER_CORES: ${SPARK_WORKER_CORES}
+    SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY}
+    SPARK_NO_DAEMONIZE: "true"
+  volumes: *spark-volumes
+  working_dir: /opt/spark/project
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
 
 services:
 
   spark-master:
-    image: apache/spark:4.0.0
+    image: apache/spark:${SPARK_VERSION}
     container_name: spark-master
     hostname: spark-master
-
     command:
       - /opt/spark/sbin/start-master.sh
-
     environment:
       SPARK_NO_DAEMONIZE: "true"
-
+      # Le driver du job batch tourne ici : sans ça, "from src.download ..." échoue
+      # (Python n'ajoute que le dossier du script, src/, à son chemin d'import)
+      PYTHONPATH: /opt/spark/project
     ports:
-      - "8081:8080"
-      - "7077:7077"
-
-    volumes:
-      - ./:/opt/spark/project
-
+      - "127.0.0.1:${SPARK_UI_PORT}:8080"   # UI Spark ; le port 7077 reste interne au réseau Docker
+    volumes: *spark-volumes
     working_dir: /opt/spark/project
 
-
   spark-worker-1:
-    image: apache/spark:4.0.0
+    <<: *spark-worker
     container_name: spark-worker-1
     hostname: spark-worker-1
 
-    depends_on:
-      - spark-master
-
-    command:
-      - /opt/spark/sbin/start-worker.sh
-      - spark://spark-master:7077
-
-    environment:
-      SPARK_WORKER_CORES: 2
-      SPARK_WORKER_MEMORY: 2g
-      SPARK_NO_DAEMONIZE: "true"
-
-    volumes:
-      - ./:/opt/spark/project
-
-    working_dir: /opt/spark/project
-
-
   spark-worker-2:
-    image: apache/spark:4.0.0
+    <<: *spark-worker
     container_name: spark-worker-2
     hostname: spark-worker-2
 
-    depends_on:
-      - spark-master
-
-    command:
-      - /opt/spark/sbin/start-worker.sh
-      - spark://spark-master:7077
-
-    environment:
-      SPARK_WORKER_CORES: 2
-      SPARK_WORKER_MEMORY: 2g
-      SPARK_NO_DAEMONIZE: "true"
-
-    volumes:
-      - ./:/opt/spark/project
-
-    working_dir: /opt/spark/project
-
-
   postgres:
-    image: postgres:16
+    image: postgres:${POSTGRES_VERSION}
     container_name: airflow-postgres
-
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
-
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres-airflow-data:/var/lib/postgresql/data
-
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-
   airflow-init:
-    image: apache/airflow:3.3.1
+    <<: *airflow-common
     container_name: airflow-init
-
+    command:
+      - bash
+      - -c
+      - airflow db migrate
     depends_on:
       postgres:
         condition: service_healthy
 
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      PYTHONPATH: /opt/airflow
-    command:
-      - bash
-      - -c
-      - |
-        airflow db migrate
-
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./logs:/opt/airflow/logs
-      - ./src:/opt/airflow/src
-      - ./data:/opt/airflow/data
-
-
   airflow-apiserver:
-    image: apache/airflow:3.3.1
+    <<: *airflow-common
     container_name: airflow-apiserver
-
+    command: api-server
+    ports:
+      - "127.0.0.1:${AIRFLOW_UI_PORT}:8080"
     depends_on:
       postgres:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
 
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
-      PYTHONPATH: /opt/airflow
-
-    command: api-server
-
-    ports:
-      - "8082:8080"
-
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./src:/opt/airflow/src
       - ./data:/opt/airflow/data
-
-
-  airflow-scheduler:
-    image: apache/airflow:3.3.1
-    container_name: airflow-scheduler
-
+      - ./secrets:/opt/airflow/secrets
+      - /var/run/docker.sock:/var/run/docker.sock   # permet "docker exec spark-master ..." (DAG batch)
     depends_on:
       postgres:
         condition: service_healthy
@@ -173,48 +153,15 @@ services:
       airflow-apiserver:
         condition: service_started
 
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
-      AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
-      PYTHONPATH: /opt/airflow
-    command: scheduler
-
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./logs:/opt/airflow/logs
-      - ./src:/opt/airflow/src
-      - ./data:/opt/airflow/data
-      - /var/run/docker.sock:/var/run/docker.sock
-
-
   airflow-dag-processor:
-    image: apache/airflow:3.3.1
+    <<: *airflow-common
     container_name: airflow-dag-processor
-
+    command: dag-processor
     depends_on:
       postgres:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
-
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__API_AUTH__JWT_SECRET: "mon-secret-airflow-local"
-      PYTHONPATH: /opt/airflow #permis de débugger le problème d'import 
-
-    command: dag-processor
-
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./logs:/opt/airflow/logs
-      - ./src:/opt/airflow/src
-      - ./data:/opt/airflow/data
-
 
 volumes:
   postgres-airflow-data:
