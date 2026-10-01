@@ -162,6 +162,48 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
+  
+  kafka:
+    image: apache/kafka:${KAFKA_VERSION}
+    container_name: kafka
+    hostname: kafka
+    environment:
+      # Un seul nœud qui fait broker ET controller (mode KRaft, sans ZooKeeper)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      # Les 3 "portes" de Kafka
+      #   INTERNAL   : pour les conteneurs (Spark, producteur) -> kafka:9092
+      #   EXTERNAL   : pour un script lancé sur ton PC         -> localhost:29092
+      #   CONTROLLER : usage interne de Kafka                  -> 9093
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # Un seul broker : pas de réplication possible
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    ports:
+      - "127.0.0.1:29092:29092"
+  producer:
+    image: python:3.12-slim
+    container_name: binance-producer
+    working_dir: /app
+    command: sh -c "pip install --no-cache-dir -r src/streaming/requirements.txt && python -u src/streaming/producer.py"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: binance.aggtrades
+      BINANCE_WS_URL: wss://stream.binance.com:9443/ws/btcusdt@aggTrade
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      - kafka
+    restart: unless-stopped
 
 volumes:
   postgres-airflow-data:

@@ -13,3 +13,6 @@ secrets/*
 # Divers
 _to_delete/
  
+
+data/gold/
+data/checkpoints/
