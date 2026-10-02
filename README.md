@@ -7,7 +7,7 @@ The data is ingested in three ways:
 
 - **Batch** — daily `aggTrades` archives from `data.binance.vision` (done)
 - **REST API** — the `/api/v3/aggTrades` endpoint (done)
-- **Streaming** — Kafka + Spark Structured Streaming (not started yet)
+- **Streaming** — Kafka + Spark Structured Streaming (done)
 
 Processing follows a bronze / silver / gold layout, and the gold layer is written as Parquet.
 
@@ -16,6 +16,9 @@ Processing follows a bronze / silver / gold layout, and the gold layer is writte
 - Apache Spark 4.0.0 — 1 master + 2 workers
 - Apache Airflow 3.3.1 — LocalExecutor, Postgres backend
 - PostgreSQL 16
+- Apache Kafka 4.0.0 (KRaft mode)
+- Python 3.12 producer (`confluent-kafka`, `websocket-client`)
+- Spark Kafka connector `spark-sql-kafka-0-10_2.13:4.0.0`
 - Docker Compose
 
 ## Architecture
@@ -38,6 +41,19 @@ Docker Compose network
 Airflow and Spark are kept separate: they never share memory, they only exchange files through
 the shared `./data` folder, and Airflow triggers Spark jobs from outside (see below).
 
+### Streaming path
+
+```
+Binance WebSocket --> binance-producer --> Kafka --> Spark Structured Streaming --> data/gold/btcusdt_stream
+                      (Python 3.12)        topic        driver in spark-master,
+                                           binance.     executors on the workers
+                                           aggtrades
+                                           (3 partitions)
+```
+
+Airflow is not part of the streaming path: a streaming job never terminates, whereas an Airflow
+task must.
+
 ### Why a master + 2 workers
 
 Spark runs as a small standalone cluster (1 master, 2 workers) to reproduce a real distributed
@@ -59,13 +75,18 @@ like on a production cluster but on a single host.
 .
 ├── dags/                   Airflow DAGs
 ├── data/                   shared with Spark (bronze / silver / gold)
+│   └── checkpoints/        Spark streaming checkpoint (offsets, state)
 ├── logs/                   Airflow task logs
+├── secrets/                Airflow password (not committed)
 ├── src/
 │   ├── orchestrator.py     entry point: download_* / transform_* + CLI (batch | api)
 │   ├── batch/              bronze_to_silver.py, silver_to_gold.py
 │   ├── download/           download_binance.py, api_binance.py
-│   └── session/            spark_session.py
+│   ├── session/            spark_session.py
+│   └── streaming/          producer.py, requirements.txt, stream_to_gold.py
 ├── tests/
+├── .env                    versions and credentials (not committed)
+├── Dockerfile.airflow      custom Airflow image (not enabled yet)
 └── docker-compose.yml
 ```
 
@@ -83,6 +104,24 @@ like on a production cluster but on a single host.
 - **binance_batch** — daily. Downloads the archive (PythonOperator), then runs the Spark job with a
   BashOperator that does `docker exec spark-master spark-submit ... batch`.
 
+
+### Streaming
+
+- **Topic** `binance.aggtrades`, 3 partitions, created once by hand.
+- **Producer** — `src/streaming/producer.py` runs in the `binance-producer` container (restarted
+  automatically). It receives trades over the Binance WebSocket and writes each one to Kafka.
+- **Consumer** — `src/streaming/stream_to_gold.py` reads the topic with Spark Structured Streaming:
+  micro-batch every 30 s, JSON decoding, silver cleaning, watermark, deduplication on
+  `agg_trade_id`, then aggregation by minute (same `gold1` function as batch and API).
+- **Checkpoint** — `data/checkpoints/btcusdt_stream/` stores the Kafka offsets and the aggregation
+  state. After a stop, the job resumes from the saved offsets and catches up on the trades that
+  arrived meanwhile, with no loss.
+- **Resources** — the driver runs in `spark-master` and is limited to 2 cores
+  (`--total-executor-cores 2`), which leaves the 2 other cores free for a batch job running at the
+  same time.
+- **Launch** — by hand with `spark-submit` (see Useful commands). Gold files appear about 2 to 3
+  minutes behind real time, because a minute is only written once the watermark passes it.
+
 ## How the containers talk to each other
 
 - **Same Compose network.** Every container reaches the others by service name: workers connect to
@@ -97,6 +136,11 @@ like on a production cluster but on a single host.
   lets the BashOperator run `docker exec spark-master spark-submit`. Here the Spark driver runs
   inside `spark-master`. In the API pipeline it's different: the driver runs inside the Airflow
   container (client mode) and only the executors run on the workers.
+
+- **Kafka has two listeners.** `kafka:9092` for the other containers, `localhost:29092` for the host.
+- **The producer's code is bind-mounted** from `./src` into `binance-producer`, and its dependencies
+  are installed at container start from `src/streaming/requirements.txt`.
+
 
 ## Getting started
 
